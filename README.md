@@ -22,6 +22,16 @@ Do not open `index.html` directly, because browser security restrictions may pre
 
 Local images must use a 2:1 equirectangular projection, such as 4096×2048. They stay in the browser and are cleared when the page is reloaded.
 
+## Download for local use
+
+After choosing a panorama and adjusting its appearance, click **Download Local
+Viewer** in the Export / Embed panel. The downloaded ZIP contains the selected
+image, the current visual settings, the krpano viewer, and a Mac launcher.
+
+Extract the ZIP and double-click `OPEN_LOCAL.command`. If macOS blocks the first
+launch, right-click the file and choose **Open**. The exported viewer runs on the
+local computer and does not upload the selected panorama to Vercel.
+
 ## Add a built-in panorama
 
 1. Add the image to the `image/` folder.

@@ -165,6 +165,7 @@
   <script src="texture.js"></script>
   <script src="export.js"></script>
   <script src="uiToggle.js"></script>
+  <script>window.__LOCAL_EXPORT__ = null;</script>
   <script>
     function showSetupMessage() {
       const status = document.getElementById("status");
@@ -183,6 +184,13 @@
       { name: "Point Grey 03 B&W", url: "image/Point-Grey-03-bw.jpg" }
     ];
 
+    if (window.__LOCAL_EXPORT__ && window.__LOCAL_EXPORT__.imagePath) {
+      builtInPanoramas.splice(0, builtInPanoramas.length, {
+        name: window.__LOCAL_EXPORT__.imageName || "Exported panorama",
+        url: window.__LOCAL_EXPORT__.imagePath
+      });
+    }
+
     let krpanoViewer;
     const localPanoramas = new Map();
 
@@ -192,8 +200,9 @@
       output.classList.toggle("is-visible", Boolean(message));
     }
 
-    function loadLocalPanorama(url) {
+    function loadLocalPanorama(entry) {
       if (!krpanoViewer) return;
+      const url = typeof entry === "string" ? entry : entry.url;
       const xml =
         '<krpano><view hlookat="0" vlookat="8" fov="92" />' +
         '<image type="SPHERE"><sphere url="' + url + '" /></image></krpano>';
@@ -232,7 +241,11 @@
         }
 
         const key = "local_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-        localPanoramas.set(key, objectUrl);
+        localPanoramas.set(key, {
+          url: objectUrl,
+          file: file,
+          name: file.name
+        });
 
         const option = document.createElement("option");
         option.value = key;
@@ -261,14 +274,24 @@
       Array.from(files).forEach(addPanoramaFile);
     }
 
-    // Exposed for export.js: only built-in panoramas can be embedded, since
-    // locally dropped files are ephemeral blob: URLs that stop working after reload.
+    // Exposed for export.js. Local files cannot be shared in an iframe, but the
+    // original File is retained so the local-viewer ZIP can include it.
     window.getExportPanoramaParam = function () {
       const select = document.getElementById("panorama-select");
       if (!select || !select.value) return null;
       const match = /^builtin_(\d+)$/.exec(select.value);
-      if (!match) return null;
-      return { type: "builtin", index: Number(match[1]) };
+      if (match) {
+        const index = Number(match[1]);
+        return {
+          type: "builtin",
+          index: index,
+          name: builtInPanoramas[index].name,
+          url: builtInPanoramas[index].url
+        };
+      }
+      const local = localPanoramas.get(select.value);
+      if (!local || !local.file) return null;
+      return { type: "custom", file: local.file, name: local.name };
     };
 
     window.getExportViewParams = function () {
@@ -289,7 +312,9 @@
     // so an exported iframe link opens with the chosen look already applied
     // and its editing UI hidden. See export.js for the parameters it writes.
     function applyEmbedParams() {
-      const params = new URLSearchParams(window.location.search);
+      const params = window.__LOCAL_EXPORT__ && window.__LOCAL_EXPORT__.params
+        ? new URLSearchParams(window.__LOCAL_EXPORT__.params)
+        : new URLSearchParams(window.location.search);
       if (![...params.keys()].length) return;
 
       const panoParam = params.get("pano");
