@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#10201b">
+  <title>360° Panorama Viewer</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    html,
+    body,
+    #pano {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background: #10201b;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #pano {
+      position: relative;
+    }
+
+    .image-picker {
+      position: fixed;
+      z-index: 10;
+      top: max(16px, env(safe-area-inset-top));
+      left: max(16px, env(safe-area-inset-left));
+      display: grid;
+      grid-template-columns: auto minmax(180px, 1fr);
+      align-items: center;
+      gap: 8px 10px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 255, 255, .24);
+      border-radius: 12px;
+      background: rgba(7, 20, 17, .78);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .22);
+      backdrop-filter: blur(12px);
+    }
+
+    .image-picker label {
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, .72);
+    }
+
+    .image-picker select {
+      min-width: 170px;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 32px 8px 10px;
+      background: #fff;
+      color: #10201b;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .drop-zone {
+      grid-column: 1 / -1;
+      display: block;
+      padding: 10px 14px;
+      border: 1px dashed rgba(255, 255, 255, .45);
+      border-radius: 8px;
+      color: rgba(255, 255, 255, .9);
+      font-size: 13px;
+      text-align: center;
+      cursor: pointer;
+      transition: background .15s ease, border-color .15s ease;
+    }
+
+    .drop-zone:hover,
+    .drop-zone.is-dragging {
+      border-color: #fff;
+      background: rgba(255, 255, 255, .14);
+    }
+
+    .drop-zone input {
+      display: none;
+    }
+
+    .picker-message {
+      grid-column: 1 / -1;
+      display: none;
+      margin: 0;
+      color: #ffd8a8;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .picker-message.is-visible {
+      display: block;
+    }
+
+    .loading,
+    .error {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 32px;
+      text-align: center;
+      background: radial-gradient(circle at 50% 35%, #29483f, #071411 72%);
+    }
+
+    .message {
+      max-width: 620px;
+      padding: 24px 28px;
+      border: 1px solid rgba(255, 255, 255, .22);
+      border-radius: 18px;
+      background: rgba(7, 20, 17, .72);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, .25);
+      backdrop-filter: blur(12px);
+    }
+
+    .message h1 {
+      margin: 0 0 8px;
+      font-size: clamp(24px, 4vw, 42px);
+      font-weight: 550;
+      letter-spacing: -.02em;
+    }
+
+    .message p {
+      margin: 0;
+      color: rgba(255, 255, 255, .8);
+      line-height: 1.6;
+    }
+
+    body.embed-mode .image-picker,
+    body.embed-mode .effects-control-dock,
+    body.embed-mode #effects-ui-toggle {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="image-picker">
+    <label for="panorama-select">Panorama</label>
+    <select id="panorama-select" disabled>
+      <option value="" selected>No panoramas loaded</option>
+    </select>
+    <label class="drop-zone" id="drop-zone">
+      Drop a 2:1 panorama here or click to browse
+      <input id="file-input" type="file" accept="image/*" multiple>
+    </label>
+    <p class="picker-message" id="picker-message" role="status"></p>
+  </div>
+
+  <div id="pano">
+    <div class="loading" id="status">
+      <div class="message">
+        <h1>360° Panorama Viewer</h1>
+        <p>Loading the 360° panorama…</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="colorEffect.js"></script>
+  <script src="frame.js"></script>
+  <script src="texture.js"></script>
+  <script src="export.js"></script>
+  <script src="uiToggle.js"></script>
+  <script>
+    function showSetupMessage() {
+      const status = document.getElementById("status");
+      status.className = "error";
+      status.querySelector("p").innerHTML =
+        "<strong>krpano.js</strong> was not found. Export it from krpano and place it in the same folder as this HTML file.";
+    }
+
+    const builtInPanoramas = [
+      { name: "Fraser River B&W (High Resolution)", url: "image/frazer-river-bw-high-resolution.jpg" },
+      { name: "Point Grey 01", url: "image/Point-Grey-01.jpg" },
+      { name: "Point Grey 01 B&W", url: "image/Point-Grey-01-bw.jpg" },
+      { name: "Point Grey 02", url: "image/Point-Grey-02.jpg" },
+      { name: "Point Grey 02 B&W", url: "image/Point-Grey-02-bw.jpg" },
+      { name: "Point Grey 03", url: "image/Point-Grey-03.jpg" },
+      { name: "Point Grey 03 B&W", url: "image/Point-Grey-03-bw.jpg" }
+    ];
+
+    let krpanoViewer;
+    const localPanoramas = new Map();
+
+    function showPickerMessage(message) {
+      const output = document.getElementById("picker-message");
+      output.textContent = message;
+      output.classList.toggle("is-visible", Boolean(message));
+    }
+
+    function loadLocalPanorama(url) {
+      if (!krpanoViewer) return;
+      const xml =
+        '<krpano><view hlookat="0" vlookat="8" fov="92" />' +
+        '<image type="SPHERE"><sphere url="' + url + '" /></image></krpano>';
+      krpanoViewer.actions.loadxml(xml, null, "MERGE", "BLEND(0.5)");
+    }
+
+    function changePanorama(value) {
+      if (!krpanoViewer) return;
+      showPickerMessage("");
+
+      if (localPanoramas.has(value)) {
+        loadLocalPanorama(localPanoramas.get(value));
+      }
+    }
+
+    function addPanoramaFile(file) {
+      if (!file.type.startsWith("image/")) {
+        showPickerMessage("Please choose an image file.");
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(file);
+      const image = new Image();
+
+      image.onload = function () {
+        const expectedWidth = image.naturalHeight * 2;
+        const tolerance = Math.max(4, image.naturalHeight * 0.01);
+
+        if (Math.abs(image.naturalWidth - expectedWidth) > tolerance) {
+          URL.revokeObjectURL(objectUrl);
+          showPickerMessage(
+            file.name + " is " + image.naturalWidth + "×" + image.naturalHeight +
+            ". A 360° panorama must have a 2:1 aspect ratio."
+          );
+          return;
+        }
+
+        const key = "local_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+        localPanoramas.set(key, objectUrl);
+
+        const option = document.createElement("option");
+        option.value = key;
+        option.textContent = file.name;
+
+        const select = document.getElementById("panorama-select");
+        if (select.options.length === 1 && !select.options[0].value) {
+          select.remove(0);
+        }
+        select.appendChild(option);
+        select.disabled = false;
+        select.value = key;
+        showPickerMessage("");
+        changePanorama(key);
+      };
+
+      image.onerror = function () {
+        URL.revokeObjectURL(objectUrl);
+        showPickerMessage("The selected image could not be opened.");
+      };
+
+      image.src = objectUrl;
+    }
+
+    function handleFiles(files) {
+      Array.from(files).forEach(addPanoramaFile);
+    }
+
+    // Exposed for export.js: only built-in panoramas can be embedded, since
+    // locally dropped files are ephemeral blob: URLs that stop working after reload.
+    window.getExportPanoramaParam = function () {
+      const select = document.getElementById("panorama-select");
+      if (!select || !select.value) return null;
+      const match = /^builtin_(\d+)$/.exec(select.value);
+      if (!match) return null;
+      return { type: "builtin", index: Number(match[1]) };
+    };
+
+    window.getExportViewParams = function () {
+      if (!krpanoViewer) return null;
+      return {
+        hlookat: krpanoViewer.get("view.hlookat"),
+        vlookat: krpanoViewer.get("view.vlookat"),
+        fov: krpanoViewer.get("view.fov")
+      };
+    };
+
+    function fireEvent(el, type) {
+      if (!el) return;
+      el.dispatchEvent(new Event(type, { bubbles: true }));
+    }
+
+    // Reproduces the current effect panel state from URL query parameters,
+    // so an exported iframe link opens with the chosen look already applied
+    // and its editing UI hidden. See export.js for the parameters it writes.
+    function applyEmbedParams() {
+      const params = new URLSearchParams(window.location.search);
+      if (![...params.keys()].length) return;
+
+      const panoParam = params.get("pano");
+      if (panoParam && localPanoramas.has(panoParam)) {
+        const select = document.getElementById("panorama-select");
+        select.value = panoParam;
+        changePanorama(panoParam);
+      }
+
+      const tint = params.get("tint");
+      if (tint) {
+        const code = document.getElementById("color-effect-code");
+        if (code) {
+          code.value = "#" + tint;
+          fireEvent(code, "input");
+        }
+      }
+      const tintOpacity = params.get("tintop");
+      if (tintOpacity !== null) {
+        const opacity = document.getElementById("color-effect-opacity");
+        if (opacity) {
+          opacity.value = tintOpacity;
+          fireEvent(opacity, "input");
+        }
+      }
+
+      const frame = params.get("frame");
+      if (frame) {
+        const frameToggle = document.getElementById("photo-frame-toggle");
+        if (frame === "off") {
+          if (frameToggle && frameToggle.checked) {
+            frameToggle.checked = false;
+            fireEvent(frameToggle, "change");
+          }
+        } else {
+          if (frameToggle && !frameToggle.checked) {
+            frameToggle.checked = true;
+            fireEvent(frameToggle, "change");
+          }
+          const frameStyle = document.getElementById("photo-frame-style");
+          if (frameStyle) {
+            frameStyle.value = frame;
+            fireEvent(frameStyle, "change");
+          }
+          const frameColor = params.get("framecolor");
+          if (frameColor) {
+            const frameCode = document.getElementById("photo-frame-code");
+            if (frameCode) {
+              frameCode.value = "#" + frameColor;
+              fireEvent(frameCode, "input");
+            }
+          }
+          const frameWidth = params.get("framewidth");
+          if (frameWidth !== null) {
+            const width = document.getElementById("photo-frame-width");
+            if (width) {
+              width.value = frameWidth;
+              fireEvent(width, "input");
+            }
+          }
+        }
+      }
+
+      const texture = params.get("texture");
+      if (texture) {
+        const textureToggle = document.getElementById("texture-effect-toggle");
+        if (texture === "off") {
+          if (textureToggle && textureToggle.checked) {
+            textureToggle.checked = false;
+            fireEvent(textureToggle, "change");
+          }
+        } else {
+          if (textureToggle && !textureToggle.checked) {
+            textureToggle.checked = true;
+            fireEvent(textureToggle, "change");
+          }
+          const textureSelect = document.getElementById("texture-effect-select");
+          if (textureSelect) {
+            textureSelect.value = texture;
+            fireEvent(textureSelect, "change");
+          }
+          const textureOpacity = params.get("textureop");
+          if (textureOpacity !== null) {
+            const opacity = document.getElementById("texture-effect-opacity");
+            if (opacity) {
+              opacity.value = textureOpacity;
+              fireEvent(opacity, "input");
+            }
+          }
+        }
+      }
+
+      if (krpanoViewer) {
+        const hlookat = params.get("hlookat");
+        const vlookat = params.get("vlookat");
+        const fov = params.get("fov");
+        if (hlookat !== null) krpanoViewer.set("view.hlookat", hlookat);
+        if (vlookat !== null) krpanoViewer.set("view.vlookat", vlookat);
+        if (fov !== null) krpanoViewer.set("view.fov", fov);
+      }
+
+      if (params.get("ui") === "0") {
+        document.body.classList.add("embed-mode");
+      }
+    }
+
+    function loadBuiltInPanoramas() {
+      const select = document.getElementById("panorama-select");
+
+      if (select.options.length === 1 && !select.options[0].value) {
+        select.remove(0);
+      }
+
+      builtInPanoramas.forEach(function (panorama, index) {
+        const key = "builtin_" + index;
+        localPanoramas.set(key, panorama.url);
+
+        const option = document.createElement("option");
+        option.value = key;
+        option.textContent = panorama.name;
+        select.appendChild(option);
+      });
+
+      if (builtInPanoramas.length > 0) {
+        select.disabled = false;
+        select.value = "builtin_0";
+        changePanorama("builtin_0");
+      }
+    }
+
+    function startPanorama() {
+      embedpano({
+        xml: "pano.xml",
+        target: "pano",
+        id: "panoramaViewer",
+        bgcolor: "#10201b",
+        webgl: true,
+        webxr: "auto",
+        mobilescale: 1.0,
+        safearea: "auto",
+        consolelog: true,
+        onready: function (krpano) {
+          krpanoViewer = krpano;
+          const status = document.getElementById("status");
+          if (status) status.remove();
+
+          const select = document.getElementById("panorama-select");
+          select.addEventListener("change", function () {
+            changePanorama(this.value);
+          });
+
+          loadBuiltInPanoramas();
+          applyEmbedParams();
+
+          const fileInput = document.getElementById("file-input");
+          const dropZone = document.getElementById("drop-zone");
+
+          fileInput.addEventListener("change", function () {
+            handleFiles(this.files);
+            this.value = "";
+          });
+
+          ["dragenter", "dragover"].forEach(function (eventName) {
+            dropZone.addEventListener(eventName, function (event) {
+              event.preventDefault();
+              dropZone.classList.add("is-dragging");
+            });
+          });
+
+          ["dragleave", "drop"].forEach(function (eventName) {
+            dropZone.addEventListener(eventName, function (event) {
+              event.preventDefault();
+              dropZone.classList.remove("is-dragging");
+            });
+          });
+
+          dropZone.addEventListener("drop", function (event) {
+            handleFiles(event.dataTransfer.files);
+          });
+        }
+      });
+    }
+
+    const viewerScript = document.createElement("script");
+    viewerScript.src = "krpano.js";
+    viewerScript.onload = startPanorama;
+    viewerScript.onerror = showSetupMessage;
+    document.head.appendChild(viewerScript);
+  </script>
+</body>
+</html>
